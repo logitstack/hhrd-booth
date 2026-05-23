@@ -40,3 +40,4 @@ hhrd-booth/
 
 `DEPLOY.md` walks through the GitHub + Vercel setup and the Fully Kiosk Browser setup on the Android touchscreen.
 
+
