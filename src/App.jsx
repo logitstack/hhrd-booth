@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { COUNTRY_DATA, PROGRAMS as PROGRAMS_BASE, PROGRAM_UNITS, PHOTO_MANIFEST, countrySlug } from './countryData';
+import { QUIZ_QUESTIONS, QUIZ_LENGTH, Leaderboard, pickQuestions } from './quizData';
 
 // ============================================================
 // HHRD GLOBAL IMPACT - ICNA 2026 Booth
@@ -1292,21 +1293,55 @@ function RankList({ title, empty, rows, valueFormat }) {
 // Globe component
 // ============================================================
 
-function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, idleSpin }) {
+// Build a single name + alias lookup map. Used by country-path tap handlers to
+// find the COUNTRY entry when a SVG path fires a pointer event with a country name.
+const COUNTRY_LOOKUP = (() => {
+  const m = new Map();
+  COUNTRIES.forEach(c => {
+    m.set(c.name.toLowerCase(), c);
+    c.aliases.forEach(a => m.set(a.toLowerCase(), c));
+  });
+  return m;
+})();
+
+const ZOOM_MIN = 0.7;
+const ZOOM_MAX = 3.5;
+const ZOOM_STEP = 1.35;  // multiplier per +/- button click
+
+function Globe({
+  geoData,
+  focusTarget,
+  onPinTap,                  // legacy name kept; called for any country tap (pin OR path)
+  selectedCountry,
+  onClosePopup,
+  idleSpin,
+  hidePins = false,          // quiz mode hides pins so visitors find countries themselves
+  hidePopup = false,         // quiz mode hides the popup so the question stays in focus
+  highlightCountryName = null,  // quiz feedback: outline a specific country (correct or wrong)
+  highlightColor = null,        // matching color for the highlight
+  showCorrectName = null,       // optional: show what the right answer was (after wrong tap)
+  showCorrectColor = null
+}) {
   const [rotation, setRotation] = useState([20, -15, 0]);
-  const [zoom] = useState(1);
+  const [zoom, setZoom] = useState(1);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const baseScale = GLOBE_SIZE / 2.2;
 
-  const dragRef = useRef(null);
+  // Multi-pointer tracking for pinch zoom. pointerId -> {x, y}
+  const pointersRef = useRef(new Map());
+  const dragRef = useRef(null);    // single-touch rotation state
+  const pinchRef = useRef(null);   // two-touch zoom state
+
   const idleRef = useRef(idleSpin);
   const rotationRef = useRef(rotation);
+  const zoomRef = useRef(zoom);
   const rafRef = useRef();
   const animRef = useRef(null);
   const containerRef = useRef();
 
   useEffect(() => { idleRef.current = idleSpin; }, [idleSpin]);
   useEffect(() => { rotationRef.current = rotation; }, [rotation]);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
   useLayoutEffect(() => {
     if (!containerRef.current) return;
@@ -1324,7 +1359,8 @@ function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, 
     let last = performance.now();
     const tick = (t) => {
       const dt = t - last; last = t;
-      if (idleRef.current && !dragRef.current && !animRef.current && !selectedCountry) {
+      // Auto-spin only when idle, no input in progress, no focus animation, no selection
+      if (idleRef.current && !dragRef.current && !pinchRef.current && !animRef.current && !selectedCountry) {
         setRotation(r => [r[0] + dt * 0.008, r[1], 0]);
       }
       rafRef.current = requestAnimationFrame(tick);
@@ -1356,56 +1392,109 @@ function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, 
     requestAnimationFrame(step);
   }, [focusTarget]);
 
+  // ---- Pointer event handling -------------------------------------------
+  // One pointer down: starts a rotation drag.
+  // Second pointer down: cancels the drag and starts a pinch.
+  // Pointer up: removes that pointer from the map. When map empties, drag ends.
+
   const handlePointerDown = (e) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = {
-      x: e.clientX, y: e.clientY,
-      r0: rotationRef.current.slice(),
-      lastX: e.clientX, lastY: e.clientY,
-      vx: 0, vy: 0, t: performance.now(), moved: false
-    };
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     animRef.current = null;
+
+    if (pointersRef.current.size === 1) {
+      dragRef.current = {
+        x: e.clientX, y: e.clientY,
+        r0: rotationRef.current.slice(),
+        lastX: e.clientX, lastY: e.clientY,
+        vx: 0, vy: 0, t: performance.now(), moved: false
+      };
+    } else if (pointersRef.current.size === 2) {
+      // Second finger arrived. Cancel single-touch drag and start pinch from current zoom.
+      dragRef.current = null;
+      const pts = [...pointersRef.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinchRef.current = {
+        startDist: dist || 1,
+        startZoom: zoomRef.current
+      };
+    }
   };
+
   const handlePointerMove = (e) => {
-    if (!dragRef.current) return;
-    const dx = e.clientX - dragRef.current.x;
-    const dy = e.clientY - dragRef.current.y;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragRef.current.moved = true;
-    const sens = 90 / (baseScale * zoom);
-    setRotation([
-      dragRef.current.r0[0] + dx * sens * 1.4,
-      Math.max(-88, Math.min(88, dragRef.current.r0[1] - dy * sens * 1.4)),
-      0
-    ]);
-    const now = performance.now();
-    const ddt = now - dragRef.current.t || 1;
-    dragRef.current.vx = (e.clientX - dragRef.current.lastX) / ddt;
-    dragRef.current.vy = (e.clientY - dragRef.current.lastY) / ddt;
-    dragRef.current.lastX = e.clientX;
-    dragRef.current.lastY = e.clientY;
-    dragRef.current.t = now;
-  };
-  const handlePointerUp = () => {
-    if (!dragRef.current) return;
-    const wasMoved = dragRef.current.moved;
-    let vx = dragRef.current.vx, vy = dragRef.current.vy;
-    dragRef.current = null;
-    if (!wasMoved) return;
-    const sens = 90 / (baseScale * zoom);
-    const decay = 0.93;
-    const inertia = () => {
-      if (dragRef.current) return;
-      if (Math.abs(vx) < 0.002 && Math.abs(vy) < 0.002) return;
-      setRotation(r => [
-        r[0] + vx * 16 * sens * 1.4,
-        Math.max(-88, Math.min(88, r[1] - vy * 16 * sens * 1.4)),
+    if (!pointersRef.current.has(e.pointerId)) return;
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pinchRef.current && pointersRef.current.size === 2) {
+      const pts = [...pointersRef.current.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      const ratio = dist / pinchRef.current.startDist;
+      const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, pinchRef.current.startZoom * ratio));
+      setZoom(newZoom);
+      return;
+    }
+
+    if (dragRef.current && pointersRef.current.size === 1) {
+      const dx = e.clientX - dragRef.current.x;
+      const dy = e.clientY - dragRef.current.y;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragRef.current.moved = true;
+      const sens = 90 / (baseScale * zoomRef.current);
+      setRotation([
+        dragRef.current.r0[0] + dx * sens * 1.4,
+        Math.max(-88, Math.min(88, dragRef.current.r0[1] - dy * sens * 1.4)),
         0
       ]);
-      vx *= decay; vy *= decay;
-      requestAnimationFrame(inertia);
-    };
-    requestAnimationFrame(inertia);
+      const now = performance.now();
+      const ddt = now - dragRef.current.t || 1;
+      dragRef.current.vx = (e.clientX - dragRef.current.lastX) / ddt;
+      dragRef.current.vy = (e.clientY - dragRef.current.lastY) / ddt;
+      dragRef.current.lastX = e.clientX;
+      dragRef.current.lastY = e.clientY;
+      dragRef.current.t = now;
+    }
   };
+
+  const handlePointerUp = (e) => {
+    pointersRef.current.delete(e.pointerId);
+
+    if (pointersRef.current.size < 2) {
+      pinchRef.current = null;
+    }
+    if (pointersRef.current.size === 0 && dragRef.current) {
+      const wasMoved = dragRef.current.moved;
+      let vx = dragRef.current.vx, vy = dragRef.current.vy;
+      dragRef.current = null;
+      if (!wasMoved) return;
+      const sens = 90 / (baseScale * zoomRef.current);
+      const decay = 0.93;
+      const inertia = () => {
+        if (dragRef.current || pinchRef.current) return;
+        if (Math.abs(vx) < 0.002 && Math.abs(vy) < 0.002) return;
+        setRotation(r => [
+          r[0] + vx * 16 * sens * 1.4,
+          Math.max(-88, Math.min(88, r[1] - vy * 16 * sens * 1.4)),
+          0
+        ]);
+        vx *= decay; vy *= decay;
+        requestAnimationFrame(inertia);
+      };
+      requestAnimationFrame(inertia);
+    }
+  };
+
+  // Tap handler shared by both pins and country paths. Resolves the country
+  // and forwards to onPinTap unless the gesture turned into a drag or pinch.
+  const handleCountryTap = useCallback((countryName) => {
+    if (dragRef.current?.moved) return;
+    if (pinchRef.current) return;
+    const country = COUNTRY_LOOKUP.get(countryName.toLowerCase());
+    if (country && onPinTap) onPinTap(country);
+  }, [onPinTap]);
+
+  // ---- Zoom buttons ----
+  const zoomIn  = () => setZoom(z => Math.min(ZOOM_MAX, z * ZOOM_STEP));
+  const zoomOut = () => setZoom(z => Math.max(ZOOM_MIN, z / ZOOM_STEP));
+  const zoomReset = () => setZoom(1);
 
   const projection = useMemo(() =>
     d3.geoOrthographic()
@@ -1423,11 +1512,9 @@ function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, 
     return geoData.features.map((f, i) => {
       const name = (f.properties && (f.properties.name || f.properties.NAME || f.properties.ADMIN)) || `c${i}`;
       const lname = name.toLowerCase();
-      const isActive = COUNTRIES.some(c =>
-        c.name.toLowerCase() === lname ||
-        c.aliases.some(a => a.toLowerCase() === lname)
-      );
-      return { key: i, name, isActive, d: path(f) };
+      const matchedCountry = COUNTRY_LOOKUP.get(lname);
+      const isActive = !!matchedCountry;
+      return { key: i, name, isActive, matchedName: matchedCountry?.name || null, d: path(f) };
     }).filter(c => c.d);
   }, [geoData, path]);
 
@@ -1497,18 +1584,40 @@ function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, 
         <circle cx={GLOBE_SIZE / 2} cy={GLOBE_SIZE / 2} r={baseScale * zoom} fill="url(#oceanGrad)" />
         <path d={path(graticule)} fill="none" stroke={COLORS.graticule} strokeWidth="0.5" opacity="0.55" />
 
-        {countryPaths.map(c => (
-          <path key={c.key} d={c.d}
-            fill={c.isActive ? COLORS.countryActive : COLORS.countryInactive}
-            fillOpacity={c.isActive ? 1 : 0.85}
-            stroke={c.isActive ? COLORS.countryActiveStroke : COLORS.countryInactiveStroke}
-            strokeWidth={c.isActive ? 1.2 : 0.3}
-            strokeOpacity={0.8} />
-        ))}
+        {countryPaths.map(c => {
+          // Active countries (those HHRD operates in) are tappable. The path's pointerUp
+          // doesn't stopPropagation so the SVG's pointerUp still runs to clear drag state.
+          // The handleCountryTap helper bails if a drag or pinch was in progress.
+          const isHighlight = highlightCountryName && c.matchedName === highlightCountryName;
+          const isCorrectShow = showCorrectName && c.matchedName === showCorrectName;
+          let fill = c.isActive ? COLORS.countryActive : COLORS.countryInactive;
+          let stroke = c.isActive ? COLORS.countryActiveStroke : COLORS.countryInactiveStroke;
+          let strokeWidth = c.isActive ? 1.2 : 0.3;
+          if (isHighlight && highlightColor) {
+            fill = highlightColor;
+            stroke = highlightColor;
+            strokeWidth = 2.5;
+          }
+          if (isCorrectShow && showCorrectColor) {
+            stroke = showCorrectColor;
+            strokeWidth = 3;
+          }
+          return (
+            <path key={c.key} d={c.d}
+              fill={fill}
+              fillOpacity={c.isActive ? 1 : 0.85}
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              strokeOpacity={0.85}
+              style={c.isActive ? { cursor: "pointer" } : undefined}
+              onPointerUp={c.isActive ? (() => handleCountryTap(c.name)) : undefined}
+            />
+          );
+        })}
 
         <circle cx={GLOBE_SIZE / 2} cy={GLOBE_SIZE / 2} r={baseScale * zoom} fill="url(#rimGlow)" pointerEvents="none" />
 
-        {pinData.map(p => {
+        {!hidePins && pinData.map(p => {
           const isSelected = selectedCountry?.name === p.c.name;
           const programCount = p.c.programs.length;
           const baseR = 5 + Math.min(programCount, 11) * 0.5;
@@ -1516,7 +1625,7 @@ function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, 
             <g key={p.c.name} transform={`translate(${p.x}, ${p.y})`}
               opacity={p.visible ? 1 : 0.35} style={{ cursor: "pointer" }}
               onPointerDown={(e) => e.stopPropagation()}
-              onPointerUp={(e) => { e.stopPropagation(); if (!dragRef.current?.moved) onPinTap(p.c); }}>
+              onPointerUp={(e) => { e.stopPropagation(); handleCountryTap(p.c.name); }}>
               <circle r={baseR + 6} fill="none" stroke={COLORS.accent} strokeWidth="1.4" opacity="0.65">
                 <animate attributeName="r" values={`${baseR};${baseR + 14};${baseR}`} dur="2.6s" repeatCount="indefinite" />
                 <animate attributeName="opacity" values="0.7;0;0.7" dur="2.6s" repeatCount="indefinite" />
@@ -1529,12 +1638,554 @@ function Globe({ geoData, focusTarget, onPinTap, selectedCountry, onClosePopup, 
         })}
       </svg>
 
-      {selectedCountry && popupScreen && (
+      {/* Zoom controls. Bottom-right, large enough for touch. */}
+      <div
+        className="absolute"
+        style={{ right: 24, bottom: 24, display: "flex", flexDirection: "column", gap: 8, zIndex: 8 }}
+      >
+        <button onPointerUp={(e) => { e.stopPropagation(); zoomIn(); }}
+          aria-label="Zoom in"
+          style={{
+            width: 56, height: 56, borderRadius: 14,
+            background: COLORS.bg, border: `1px solid ${COLORS.panelBorderStrong}`,
+            boxShadow: COLORS.shadowSoft, color: COLORS.textPrimary,
+            fontFamily: "'Outfit', sans-serif", fontWeight: 600, fontSize: 26,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", lineHeight: 1, paddingBottom: 4
+          }}>+</button>
+        <button onPointerUp={(e) => { e.stopPropagation(); zoomOut(); }}
+          aria-label="Zoom out"
+          style={{
+            width: 56, height: 56, borderRadius: 14,
+            background: COLORS.bg, border: `1px solid ${COLORS.panelBorderStrong}`,
+            boxShadow: COLORS.shadowSoft, color: COLORS.textPrimary,
+            fontFamily: "'Outfit', sans-serif", fontWeight: 600, fontSize: 32,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer", lineHeight: 1, paddingBottom: 10
+          }}>−</button>
+        {Math.abs(zoom - 1) > 0.05 && (
+          <button onPointerUp={(e) => { e.stopPropagation(); zoomReset(); }}
+            aria-label="Reset zoom"
+            style={{
+              width: 56, height: 36, borderRadius: 12,
+              background: COLORS.bgSubtle, border: `1px solid ${COLORS.panelBorder}`,
+              color: COLORS.textSecondary,
+              fontFamily: "'Outfit', sans-serif", fontWeight: 600, fontSize: 10,
+              letterSpacing: "0.18em", textTransform: "uppercase",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer"
+            }}>Reset</button>
+        )}
+      </div>
+
+      {selectedCountry && popupScreen && !hidePopup && (
         <CountryPopup country={selectedCountry}
           x={popupScreen.x} y={popupScreen.y}
           containerW={containerSize.w} containerH={containerSize.h}
           onClose={onClosePopup} />
       )}
+    </div>
+  );
+}
+
+// ============================================================
+// Quiz components
+// ============================================================
+
+// Intro screen. Asks for a nickname, explains the rules, gives a Start button.
+function QuizIntro({ onStart, onCancel, defaultNickname }) {
+  const [nickname, setNickname] = useState(defaultNickname || "");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    // Autofocus the nickname field once the modal mounts.
+    const t = setTimeout(() => inputRef.current?.focus(), 100);
+    return () => clearTimeout(t);
+  }, []);
+
+  const handleStart = () => {
+    const clean = nickname.trim().slice(0, 14) || "Guest";
+    onStart(clean);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: "rgba(12, 35, 64, 0.72)", zIndex: 220, backdropFilter: "blur(4px)" }}
+    >
+      <div
+        className="rounded-2xl overflow-hidden flex flex-col"
+        style={{
+          width: 560, background: COLORS.bg,
+          boxShadow: COLORS.shadowPop,
+          animation: "hhrd-pop-in 0.32s cubic-bezier(.2,.9,.2,1.1)"
+        }}
+      >
+        <div className="px-8 pt-7 pb-6"
+          style={{ background: COLORS.navy, color: "#fff" }}>
+          <div style={{
+            fontFamily: "'Outfit', sans-serif",
+            fontSize: "10px",
+            letterSpacing: "0.32em",
+            textTransform: "uppercase",
+            opacity: 0.75,
+            fontWeight: 600,
+            marginBottom: 6
+          }}>
+            HHRD World Relief Quiz
+          </div>
+          <h3 style={{
+            fontFamily: "'Fraunces', serif",
+            fontWeight: 400,
+            fontSize: "32px",
+            letterSpacing: "-0.01em",
+            lineHeight: 1.05,
+            fontVariationSettings: "'opsz' 144"
+          }}>
+            How well do you know the world's humanitarian crises?
+          </h3>
+          <div style={{
+            fontFamily: "'Fraunces', serif",
+            fontWeight: 300,
+            fontStyle: "italic",
+            fontSize: "15px",
+            opacity: 0.9,
+            marginTop: 10,
+            lineHeight: 1.4
+          }}>
+            {QUIZ_LENGTH} questions. Read each one, then tap the country on the globe.
+            See where HHRD is responding to today's largest crises.
+          </div>
+        </div>
+
+        <div className="px-8 py-7 flex flex-col gap-5">
+          <div>
+            <label style={{
+              display: "block",
+              fontFamily: "'Outfit', sans-serif",
+              fontSize: "10px",
+              letterSpacing: "0.28em",
+              textTransform: "uppercase",
+              color: COLORS.textSecondary,
+              fontWeight: 600,
+              marginBottom: 8
+            }}>
+              Your nickname for the leaderboard
+            </label>
+            <input
+              ref={inputRef}
+              type="text"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value.slice(0, 14))}
+              placeholder="e.g. Sara, Hassan, Mom"
+              maxLength={14}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleStart(); }}
+              style={{
+                width: "100%",
+                padding: "14px 16px",
+                fontFamily: "'Fraunces', serif",
+                fontWeight: 500,
+                fontSize: "20px",
+                color: COLORS.textPrimary,
+                background: COLORS.bgSubtle,
+                border: `1.5px solid ${COLORS.panelBorderStrong}`,
+                borderRadius: 12,
+                outline: "none"
+              }}
+            />
+          </div>
+
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              onPointerUp={handleStart}
+              className="flex-1 rounded-full transition-all hover:scale-[1.02]"
+              style={{
+                height: 56,
+                background: COLORS.accent,
+                border: "none",
+                color: "#fff",
+                cursor: "pointer",
+                fontFamily: "'Outfit', sans-serif",
+                fontWeight: 600,
+                fontSize: "15px",
+                letterSpacing: "0.04em",
+                boxShadow: `0 8px 20px -8px ${COLORS.accent}aa`
+              }}
+            >
+              Start quiz
+            </button>
+            <button
+              onPointerUp={onCancel}
+              className="px-6 rounded-full"
+              style={{
+                height: 56,
+                background: "transparent",
+                border: `1.5px solid ${COLORS.panelBorder}`,
+                color: COLORS.textSecondary,
+                cursor: "pointer",
+                fontFamily: "'Outfit', sans-serif",
+                fontWeight: 500,
+                fontSize: "13px"
+              }}
+            >
+              Back to globe
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Question banner. Shows at the top of the screen during quiz play.
+function QuizBanner({ question, questionIndex, total, score, onQuit }) {
+  return (
+    <div
+      className="absolute top-0 left-0 right-0"
+      style={{
+        background: COLORS.bg,
+        borderBottom: `1px solid ${COLORS.panelBorder}`,
+        boxShadow: COLORS.shadowSoft,
+        zIndex: 18,
+        padding: "16px 24px"
+      }}
+    >
+      <div className="flex items-center justify-between mb-3">
+        <div style={{
+          fontFamily: "'Outfit', sans-serif",
+          fontSize: "11px",
+          letterSpacing: "0.28em",
+          textTransform: "uppercase",
+          color: COLORS.accent,
+          fontWeight: 700
+        }}>
+          Question {questionIndex + 1} of {total}
+        </div>
+        <div className="flex items-center gap-4">
+          <div style={{
+            fontFamily: "'Outfit', sans-serif",
+            fontSize: "11px",
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            color: COLORS.textSecondary,
+            fontWeight: 600
+          }}>
+            Score
+            <span style={{
+              fontFamily: "'Fraunces', serif",
+              fontSize: "20px",
+              color: COLORS.navy,
+              fontWeight: 600,
+              marginLeft: 8,
+              fontVariationSettings: "'opsz' 144"
+            }}>
+              {score}
+            </span>
+          </div>
+          <button
+            onPointerUp={onQuit}
+            className="w-10 h-10 flex items-center justify-center rounded-full"
+            style={{
+              background: COLORS.bgSubtle,
+              border: `1px solid ${COLORS.panelBorder}`,
+              color: COLORS.textSecondary,
+              cursor: "pointer"
+            }}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+      <div style={{
+        fontFamily: "'Fraunces', serif",
+        fontWeight: 500,
+        fontSize: "26px",
+        letterSpacing: "-0.01em",
+        color: COLORS.textPrimary,
+        lineHeight: 1.2,
+        fontVariationSettings: "'opsz' 144"
+      }}>
+        {question.question}
+      </div>
+      <div style={{
+        fontFamily: "'Outfit', sans-serif",
+        fontSize: "12px",
+        color: COLORS.textSecondary,
+        marginTop: 8,
+        fontStyle: "italic"
+      }}>
+        Tap a country on the globe to answer.
+      </div>
+    </div>
+  );
+}
+
+// Feedback overlay. Shows after the user taps. Sits above the banner.
+function QuizFeedback({ correct, tappedName, correctName, context }) {
+  const bg = correct ? "#16a34a" : "#dc2626";
+  return (
+    <div
+      className="absolute top-0 left-0 right-0 flex items-start justify-center"
+      style={{ zIndex: 22, padding: "20px 24px", animation: "hhrd-feedback-slide 0.35s ease-out", pointerEvents: "none" }}
+    >
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{
+          width: "min(720px, 92vw)",
+          background: COLORS.bg,
+          border: `2px solid ${bg}`,
+          boxShadow: COLORS.shadowPop
+        }}
+      >
+        <div style={{ background: bg, color: "#fff", padding: "12px 20px" }}>
+          <div className="flex items-center justify-between">
+            <div style={{
+              fontFamily: "'Outfit', sans-serif",
+              fontWeight: 700,
+              fontSize: "11px",
+              letterSpacing: "0.3em",
+              textTransform: "uppercase"
+            }}>
+              {correct ? "Correct" : "Not quite"}
+            </div>
+            <div style={{
+              fontFamily: "'Fraunces', serif",
+              fontWeight: 600,
+              fontSize: "18px",
+              fontVariationSettings: "'opsz' 144"
+            }}>
+              {correct ? "+10" : "+0"}
+            </div>
+          </div>
+          <div style={{
+            fontFamily: "'Fraunces', serif",
+            fontWeight: 500,
+            fontSize: "22px",
+            marginTop: 4,
+            lineHeight: 1.2,
+            fontVariationSettings: "'opsz' 144"
+          }}>
+            {correct
+              ? `Yes, ${correctName}.`
+              : `The answer was ${correctName}.`}
+          </div>
+        </div>
+        {context && (
+          <div style={{
+            padding: "12px 20px",
+            fontFamily: "'Fraunces', serif",
+            fontWeight: 300,
+            fontStyle: "italic",
+            fontSize: "14px",
+            color: COLORS.textSecondary,
+            lineHeight: 1.45,
+            background: COLORS.bgSubtle
+          }}>
+            {context}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// End-of-game screen with the leaderboard.
+function QuizComplete({ score, total, nickname, leaderboard, onPlayAgain, onExit }) {
+  const correctCount = score / 10;
+  const pct = total > 0 ? Math.round((correctCount / total) * 100) : 0;
+  let title, blurb;
+  if (pct >= 87) { title = "Outstanding."; blurb = "You know the global landscape of crises and HHRD's response."; }
+  else if (pct >= 62) { title = "Strong work."; blurb = "You've got the big picture. A few more rounds and you'll have the details too."; }
+  else if (pct >= 37) { title = "Not bad."; blurb = "Some of these crises stay out of the news cycle. Now you know a few more."; }
+  else { title = "There's the work."; blurb = "HHRD's job is to make these crises seen. Thank you for spending a minute with them."; }
+
+  // Find the current player's most recent entry by name+ts to highlight in the list.
+  const myEntry = leaderboard.find(e => e.name === nickname && e.score === score);
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center"
+      style={{ background: "rgba(12, 35, 64, 0.72)", zIndex: 220, backdropFilter: "blur(4px)" }}
+    >
+      <div
+        className="rounded-2xl overflow-hidden flex flex-col"
+        style={{
+          width: 640, maxHeight: "92vh", background: COLORS.bg,
+          boxShadow: COLORS.shadowPop,
+          animation: "hhrd-pop-in 0.32s cubic-bezier(.2,.9,.2,1.1)"
+        }}
+      >
+        <div className="px-8 pt-7 pb-6"
+          style={{ background: COLORS.navy, color: "#fff" }}>
+          <div style={{
+            fontFamily: "'Outfit', sans-serif",
+            fontSize: "10px",
+            letterSpacing: "0.32em",
+            textTransform: "uppercase",
+            opacity: 0.7,
+            fontWeight: 600,
+            marginBottom: 4
+          }}>
+            Final score
+          </div>
+          <div className="flex items-baseline gap-3">
+            <span style={{
+              fontFamily: "'Fraunces', serif",
+              fontWeight: 500,
+              fontSize: "64px",
+              letterSpacing: "-0.02em",
+              lineHeight: 1,
+              fontVariationSettings: "'opsz' 144"
+            }}>
+              {score}
+            </span>
+            <span style={{
+              fontFamily: "'Outfit', sans-serif",
+              fontWeight: 400,
+              fontSize: "16px",
+              opacity: 0.7
+            }}>
+              out of {total * 10}
+            </span>
+          </div>
+          <div style={{
+            fontFamily: "'Fraunces', serif",
+            fontWeight: 500,
+            fontSize: "22px",
+            marginTop: 12,
+            lineHeight: 1.2,
+            fontVariationSettings: "'opsz' 144"
+          }}>
+            {title}
+          </div>
+          <div style={{
+            fontFamily: "'Fraunces', serif",
+            fontWeight: 300,
+            fontStyle: "italic",
+            fontSize: "14px",
+            opacity: 0.9,
+            marginTop: 4,
+            lineHeight: 1.4
+          }}>
+            {blurb}
+          </div>
+        </div>
+
+        <div className="px-8 py-6 overflow-y-auto flex-1">
+          <div style={{
+            fontFamily: "'Outfit', sans-serif",
+            fontSize: "10px",
+            letterSpacing: "0.28em",
+            textTransform: "uppercase",
+            color: COLORS.textSecondary,
+            fontWeight: 600,
+            marginBottom: 12
+          }}>
+            Leaderboard
+          </div>
+          {leaderboard.length === 0 ? (
+            <div style={{
+              fontFamily: "'Fraunces', serif", fontStyle: "italic",
+              fontSize: "14px", color: COLORS.textMuted
+            }}>
+              No scores yet.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {leaderboard.map((entry, idx) => {
+                const isMe = myEntry && entry.ts === myEntry.ts && entry.name === myEntry.name;
+                return (
+                  <div
+                    key={`${entry.name}-${entry.ts}`}
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg"
+                    style={{
+                      background: isMe ? `${COLORS.accent}14` : COLORS.bgSubtle,
+                      border: `1px solid ${isMe ? COLORS.accent + "55" : COLORS.panelBorder}`
+                    }}
+                  >
+                    <div style={{
+                      width: 28,
+                      fontFamily: "'Outfit', sans-serif",
+                      fontWeight: 700,
+                      fontSize: "13px",
+                      color: idx < 3 ? COLORS.accent : COLORS.textSecondary,
+                      textAlign: "right"
+                    }}>
+                      {idx + 1}.
+                    </div>
+                    <div className="flex-1 min-w-0" style={{
+                      fontFamily: "'Fraunces', serif",
+                      fontWeight: isMe ? 600 : 500,
+                      fontSize: "16px",
+                      color: COLORS.textPrimary,
+                      fontVariationSettings: "'opsz' 144"
+                    }}>
+                      {entry.name}
+                      {isMe && (
+                        <span style={{
+                          fontFamily: "'Outfit', sans-serif",
+                          fontWeight: 600,
+                          fontSize: "9px",
+                          letterSpacing: "0.22em",
+                          color: COLORS.accent,
+                          marginLeft: 8,
+                          textTransform: "uppercase"
+                        }}>You</span>
+                      )}
+                    </div>
+                    <div style={{
+                      fontFamily: "'Fraunces', serif",
+                      fontWeight: 600,
+                      fontSize: "18px",
+                      color: COLORS.navy,
+                      fontVariationSettings: "'opsz' 144"
+                    }}>
+                      {entry.score}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 pt-6">
+            <button
+              onPointerUp={onPlayAgain}
+              className="flex-1 rounded-full transition-all hover:scale-[1.02]"
+              style={{
+                height: 52,
+                background: COLORS.accent,
+                border: "none",
+                color: "#fff",
+                cursor: "pointer",
+                fontFamily: "'Outfit', sans-serif",
+                fontWeight: 600,
+                fontSize: "14px",
+                letterSpacing: "0.04em",
+                boxShadow: `0 8px 20px -8px ${COLORS.accent}aa`
+              }}
+            >
+              Play again
+            </button>
+            <button
+              onPointerUp={onExit}
+              className="px-6 rounded-full"
+              style={{
+                height: 52,
+                background: "transparent",
+                border: `1.5px solid ${COLORS.panelBorder}`,
+                color: COLORS.textSecondary,
+                cursor: "pointer",
+                fontFamily: "'Outfit', sans-serif",
+                fontWeight: 500,
+                fontSize: "13px"
+              }}
+            >
+              Back to globe
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1554,7 +2205,19 @@ export default function App() {
   const [attractMode, setAttractMode] = useState(true);
   const [searchFocused, setSearchFocused] = useState(false);
 
+  // Quiz state. quizPhase walks through 'idle' (not in quiz), 'intro' (nickname
+  // entry), 'playing' (showing a question), 'feedback' (showing right/wrong),
+  // and 'complete' (final score + leaderboard).
+  const [quizPhase, setQuizPhase] = useState('idle');
+  const [quizNickname, setQuizNickname] = useState("");
+  const [quizQuestions, setQuizQuestions] = useState([]);
+  const [quizCurrent, setQuizCurrent] = useState(0);
+  const [quizScore, setQuizScore] = useState(0);
+  const [quizLastAnswer, setQuizLastAnswer] = useState(null);  // { correct, tappedName, correctName, context }
+  const [quizLeaderboard, setQuizLeaderboard] = useState(() => Leaderboard.read());
+
   const mode = attractMode ? "attract" : "active";
+  const inQuiz = quizPhase !== 'idle';
 
   const lastInteractionRef = useRef(Date.now());
   const sessionStartRef = useRef(null);
@@ -1605,6 +2268,13 @@ export default function App() {
         setAttractMode(true);
         setSearchFocused(false);
         setQuery("");
+        // Reset quiz state too on idle timeout - we don't want a half-played
+        // quiz to greet the next visitor.
+        setQuizPhase('idle');
+        setQuizQuestions([]);
+        setQuizCurrent(0);
+        setQuizScore(0);
+        setQuizLastAnswer(null);
       }
     }, 4000);
     return () => clearInterval(interval);
@@ -1672,6 +2342,13 @@ export default function App() {
 
   const handleSelectCountry = (c) => {
     onAnyInteraction();
+    // In quiz playing mode, country taps are answers - route accordingly.
+    if (quizPhase === 'playing') {
+      submitQuizAnswer(c);
+      return;
+    }
+    // Ignore taps during feedback (lets the user-tapped country stay highlighted).
+    if (quizPhase === 'feedback') return;
     const isFirst = !sessionFirstCountryRef.current;
     sessionFirstCountryRef.current = true;
     Analytics.recordCountry(c.name, isFirst);
@@ -1683,6 +2360,79 @@ export default function App() {
   const handleClosePopup = () => {
     onAnyInteraction();
     setSelectedCountry(null);
+  };
+
+  // ---- Quiz handlers ----
+
+  const startQuizIntro = () => {
+    onAnyInteraction();
+    setSelectedCountry(null);  // clear any open popup
+    setQuizPhase('intro');
+  };
+
+  const beginQuizGame = (nickname) => {
+    setQuizNickname(nickname);
+    setQuizQuestions(pickQuestions(QUIZ_LENGTH));
+    setQuizCurrent(0);
+    setQuizScore(0);
+    setQuizLastAnswer(null);
+    setQuizPhase('playing');
+  };
+
+  const submitQuizAnswer = (country) => {
+    const q = quizQuestions[quizCurrent];
+    if (!q) return;
+    const correct = country.name === q.answer;
+    setQuizLastAnswer({
+      correct,
+      tappedName: country.name,
+      correctName: q.answer,
+      context: q.context
+    });
+    if (correct) setQuizScore(s => s + 10);
+    setQuizPhase('feedback');
+    // Pan the globe toward the correct country so the highlight is visible.
+    setFocusTarget({
+      lat: COUNTRY_LOOKUP.get(q.answer.toLowerCase())?.lat || 0,
+      lon: COUNTRY_LOOKUP.get(q.answer.toLowerCase())?.lon || 0,
+      ts: Date.now()
+    });
+  };
+
+  // After feedback shows for a moment, advance to next question or end the game.
+  useEffect(() => {
+    if (quizPhase !== 'feedback') return;
+    const t = setTimeout(() => {
+      if (quizCurrent + 1 >= quizQuestions.length) {
+        // End of game. The 'complete' phase effect below saves to leaderboard.
+        setQuizPhase('complete');
+      } else {
+        setQuizCurrent(c => c + 1);
+        setQuizLastAnswer(null);
+        setQuizPhase('playing');
+      }
+    }, 3000);
+    return () => clearTimeout(t);
+  }, [quizPhase, quizCurrent, quizQuestions.length]);
+
+  // When the quiz reaches 'complete' phase, save the score to the leaderboard.
+  useEffect(() => {
+    if (quizPhase === 'complete') {
+      const updated = Leaderboard.add(quizNickname, quizScore, quizQuestions.length);
+      setQuizLeaderboard(updated);
+    }
+  }, [quizPhase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const exitQuiz = () => {
+    setQuizPhase('idle');
+    setQuizQuestions([]);
+    setQuizCurrent(0);
+    setQuizScore(0);
+    setQuizLastAnswer(null);
+  };
+
+  const restartQuiz = () => {
+    beginQuizGame(quizNickname || "Guest");
   };
 
   // 5-tap admin access on the invisible top-left corner trigger.
@@ -1726,9 +2476,9 @@ export default function App() {
         className="absolute"
         style={{
           left: 0,
-          right: selectedCountry && !SOFT_LAUNCH_MODE ? 420 : 0,
+          right: selectedCountry && !SOFT_LAUNCH_MODE && !inQuiz ? 420 : 0,
           bottom: 0,
-          top: mode === "active" ? "84px" : 0,
+          top: (mode === "active" && !inQuiz) ? "84px" : (quizPhase === 'playing' || quizPhase === 'feedback') ? "150px" : 0,
           opacity: 1,
           pointerEvents: "auto",
           transition: "top 0.55s cubic-bezier(.4,.0,.2,1), right 0.45s cubic-bezier(.2,.9,.2,1)",
@@ -1743,11 +2493,53 @@ export default function App() {
             selectedCountry={selectedCountry}
             onClosePopup={handleClosePopup}
             idleSpin={true}
+            hidePins={quizPhase === 'playing' || quizPhase === 'feedback'}
+            hidePopup={inQuiz}
+            highlightCountryName={quizPhase === 'feedback' ? quizLastAnswer?.tappedName : null}
+            highlightColor={quizPhase === 'feedback' ? (quizLastAnswer?.correct ? "#16a34a" : "#dc2626") : null}
+            showCorrectName={quizPhase === 'feedback' && !quizLastAnswer?.correct ? quizLastAnswer?.correctName : null}
+            showCorrectColor={quizPhase === 'feedback' ? "#16a34a" : null}
           />
         )}
       </div>
 
-      {selectedCountry && mode === "active" && !SOFT_LAUNCH_MODE && <PhotoPane country={selectedCountry} />}
+      {selectedCountry && mode === "active" && !SOFT_LAUNCH_MODE && !inQuiz && <PhotoPane country={selectedCountry} />}
+
+      {/* Quiz UI overlays */}
+      {quizPhase === 'intro' && (
+        <QuizIntro
+          defaultNickname={quizNickname}
+          onStart={beginQuizGame}
+          onCancel={exitQuiz}
+        />
+      )}
+      {(quizPhase === 'playing' || quizPhase === 'feedback') && quizQuestions[quizCurrent] && (
+        <QuizBanner
+          question={quizQuestions[quizCurrent]}
+          questionIndex={quizCurrent}
+          total={quizQuestions.length}
+          score={quizScore}
+          onQuit={exitQuiz}
+        />
+      )}
+      {quizPhase === 'feedback' && quizLastAnswer && (
+        <QuizFeedback
+          correct={quizLastAnswer.correct}
+          tappedName={quizLastAnswer.tappedName}
+          correctName={quizLastAnswer.correctName}
+          context={quizLastAnswer.context}
+        />
+      )}
+      {quizPhase === 'complete' && (
+        <QuizComplete
+          score={quizScore}
+          total={quizQuestions.length}
+          nickname={quizNickname}
+          leaderboard={quizLeaderboard}
+          onPlayAgain={restartQuiz}
+          onExit={exitQuiz}
+        />
+      )}
 
       <div
         className="absolute left-0 right-0 top-0"
@@ -1755,7 +2547,7 @@ export default function App() {
           height: "84px",
           background: COLORS.bg,
           borderBottom: `1px solid ${COLORS.panelBorder}`,
-          opacity: mode === "active" ? 1 : 0,
+          opacity: (mode === "active" && !inQuiz) ? 1 : 0,
           pointerEvents: "none",
           transition: "opacity 0.45s ease-out",
           zIndex: 15
@@ -1768,8 +2560,8 @@ export default function App() {
           top: "18px",
           transform: "translate(-50%, 0)",
           width: "min(600px, 86vw)",
-          opacity: mode === "active" ? 1 : 0,
-          pointerEvents: mode === "active" ? "auto" : "none",
+          opacity: (mode === "active" && !inQuiz) ? 1 : 0,
+          pointerEvents: (mode === "active" && !inQuiz) ? "auto" : "none",
           transition: "opacity 0.4s ease-out 0.2s"
         }}
       >
@@ -1905,6 +2697,35 @@ export default function App() {
         </div>
       </div>
 
+      {/* Play Quiz floating button. Visible in active mode, not during quiz,
+          not when a country popup is open (so it doesn't compete for attention). */}
+      <button
+        onPointerUp={(e) => { e.stopPropagation(); startQuizIntro(); }}
+        className="absolute"
+        style={{
+          left: 24, bottom: 24, zIndex: 18,
+          padding: "14px 22px",
+          background: COLORS.navy,
+          color: "#fff",
+          border: "none",
+          borderRadius: 999,
+          fontFamily: "'Outfit', sans-serif",
+          fontWeight: 600,
+          fontSize: "13px",
+          letterSpacing: "0.16em",
+          textTransform: "uppercase",
+          boxShadow: `0 10px 24px -8px rgba(12, 35, 64, 0.5), 0 4px 10px -4px rgba(12, 35, 64, 0.3)`,
+          cursor: "pointer",
+          opacity: (mode === "active" && !inQuiz && !selectedCountry) ? 1 : 0,
+          pointerEvents: (mode === "active" && !inQuiz && !selectedCountry) ? "auto" : "none",
+          transition: "opacity 0.35s ease-out, transform 0.2s",
+          display: "flex", alignItems: "center", gap: 10
+        }}
+      >
+        <span style={{ fontSize: 18, lineHeight: 1 }}>▶</span>
+        Play the quiz
+      </button>
+
       {/* Screensaver overlay - rotating globe is already behind everything;
           this overlays a centered headline plus tap-to-begin hint. */}
       <div
@@ -1999,6 +2820,10 @@ export default function App() {
         @keyframes hhrd-pulse {
           0%, 100% { opacity: 0.75; }
           50%      { opacity: 1; }
+        }
+        @keyframes hhrd-feedback-slide {
+          0%   { opacity: 0; transform: translateY(-12px); }
+          100% { opacity: 1; transform: translateY(0); }
         }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: ${COLORS.panelBorderStrong}; border-radius: 4px; }
