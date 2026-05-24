@@ -1464,6 +1464,19 @@ function Globe({
       const wasMoved = dragRef.current.moved;
       let vx = dragRef.current.vx, vy = dragRef.current.vy;
       dragRef.current = null;
+
+      // Tap on a country path? On mouse input, setPointerCapture routes the
+      // pointerup to the SVG container (capture target), so the path's own
+      // onPointerUp never fires. Use elementFromPoint to detect what was
+      // released over. This works for both mouse and touch.
+      if (!wasMoved && !pinchRef.current) {
+        const el = document.elementFromPoint(e.clientX, e.clientY);
+        if (el && el.tagName && el.tagName.toLowerCase() === 'path' && el.dataset.countryName) {
+          handleCountryTap(el.dataset.countryName);
+        }
+        return;
+      }
+
       if (!wasMoved) return;
       const sens = 90 / (baseScale * zoomRef.current);
       const decay = 0.93;
@@ -1604,13 +1617,13 @@ function Globe({
           }
           return (
             <path key={c.key} d={c.d}
+              data-country-name={c.isActive ? c.name : undefined}
               fill={fill}
               fillOpacity={c.isActive ? 1 : 0.85}
               stroke={stroke}
               strokeWidth={strokeWidth}
               strokeOpacity={0.85}
               style={c.isActive ? { cursor: "pointer" } : undefined}
-              onPointerUp={c.isActive ? (() => handleCountryTap(c.name)) : undefined}
             />
           );
         })}
@@ -2697,24 +2710,25 @@ export default function App() {
         </div>
       </div>
 
-      {/* Play Quiz floating button. Visible in active mode, not during quiz,
-          not when a country popup is open (so it doesn't compete for attention). */}
+      {/* Play Quiz floating button. Positioned top-left in the active mode
+          header strip, to the right of the admin tap corner. Hidden during
+          quiz, when a country popup is open, and in attract mode. */}
       <button
         onPointerUp={(e) => { e.stopPropagation(); startQuizIntro(); }}
         className="absolute"
         style={{
-          left: 24, bottom: 24, zIndex: 18,
-          padding: "14px 22px",
+          left: 24, top: 22, zIndex: 35,
+          padding: "12px 20px",
           background: COLORS.navy,
           color: "#fff",
           border: "none",
           borderRadius: 999,
           fontFamily: "'Outfit', sans-serif",
           fontWeight: 600,
-          fontSize: "13px",
+          fontSize: "12px",
           letterSpacing: "0.16em",
           textTransform: "uppercase",
-          boxShadow: `0 10px 24px -8px rgba(12, 35, 64, 0.5), 0 4px 10px -4px rgba(12, 35, 64, 0.3)`,
+          boxShadow: `0 8px 20px -8px rgba(12, 35, 64, 0.5), 0 4px 10px -4px rgba(12, 35, 64, 0.3)`,
           cursor: "pointer",
           opacity: (mode === "active" && !inQuiz && !selectedCountry) ? 1 : 0,
           pointerEvents: (mode === "active" && !inQuiz && !selectedCountry) ? "auto" : "none",
@@ -2722,7 +2736,7 @@ export default function App() {
           display: "flex", alignItems: "center", gap: 10
         }}
       >
-        <span style={{ fontSize: 18, lineHeight: 1 }}>▶</span>
+        <span style={{ fontSize: 16, lineHeight: 1 }}>▶</span>
         Play the quiz
       </button>
 

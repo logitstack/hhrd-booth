@@ -1223,7 +1223,7 @@ export const COUNTRY_DATA = [
     name: `Palestine - West Bank`,
     lat: 31.9522,
     lon: 35.2332,
-    aliases: ["West Bank", "Palestine"],
+    aliases: ["West Bank"],
     programs: [
       {
         code: "ESP",
@@ -1326,7 +1326,7 @@ export const COUNTRY_DATA = [
     name: `DRC`,
     lat: -4.0383,
     lon: 21.7587,
-    aliases: ["Democratic Republic of Congo", "Congo"],
+    aliases: ["Dem. Rep. Congo", "Democratic Republic of Congo", "Democratic Republic of the Congo", "DR Congo"],
     programs: [
       {
         code: "CPRP",
@@ -1679,7 +1679,7 @@ export const COUNTRY_DATA = [
     name: `Bosnia`,
     lat: 43.9159,
     lon: 17.6791,
-    aliases: ["Bosnia and Herzegovina", "BiH"],
+    aliases: ["Bosnia and Herz.", "Bosnia and Herzegovina", "BiH"],
     programs: [
       {
         code: "ESP",
@@ -1818,7 +1818,7 @@ export const COUNTRY_DATA = [
     name: `North Macedonia`,
     lat: 41.6086,
     lon: 21.7453,
-    aliases: [],
+    aliases: ["Macedonia"],
     programs: [
       {
         code: "OSP",
