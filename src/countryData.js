@@ -2039,9 +2039,117 @@ export const COUNTRY_DATA = [
 // Entries here override the default behavior of assuming zero photos.
 // Format: 'CountryName|PROGRAM_CODE': numberOfPhotos
 export const PHOTO_MANIFEST = {
-  // Add entries as photos are uploaded. Examples:
-  //   'Pakistan|KIND-R': 3,
-  //   'Tanzania|SDLP': 2,
+  // Pakistan
+  'Pakistan|OSP': 3,
+  'Pakistan|ESP': 1,
+  'Pakistan|CWDP': 3,
+  'Pakistan|SDLP': 3,
+  'Pakistan|SPR': 3,
+  'Pakistan|CPRP': 3,
+  'Pakistan|HANP': 3,
+  'Pakistan|ERDM': 3,
+  'Pakistan|Qurbani': 3,
+  'Pakistan|KIND-R': 3,
+  // Palestine - Gaza
+  'Palestine - Gaza|WASH': 3,
+  'Palestine - Gaza|SPR': 3,
+  'Palestine - Gaza|ERDM': 3,
+  'Palestine - Gaza|Qurbani': 3,
+  // Bangladesh
+  'Bangladesh|OSP': 3,
+  'Bangladesh|ESP': 3,
+  'Bangladesh|SPR': 3,
+  'Bangladesh|CPRP': 3,
+  'Bangladesh|HANP': 3,
+  // Kenya
+  'Kenya|OSP': 3,
+  'Kenya|CWDP': 3,
+  'Kenya|SDLP': 3,
+  'Kenya|CPRP': 3,
+  'Kenya|HANP': 3,
+  'Kenya|ERDM': 3,
+  // Afghanistan
+  'Afghanistan|OSP': 3,
+  'Afghanistan|ESP': 3,
+  'Afghanistan|CWDP': 3,
+  'Afghanistan|WASH': 4,
+  'Afghanistan|SDLP': 4,
+  'Afghanistan|SPR': 4,
+  'Afghanistan|CPRP': 3,
+  'Afghanistan|HANP': 4,
+  'Afghanistan|ERDM': 3,
+  'Afghanistan|Qurbani': 3,
+  // Somalia/Somaliland
+  'Somalia/Somaliland|OSP': 3,
+  'Somalia/Somaliland|SDLP': 3,
+  'Somalia/Somaliland|CPRP': 3,
+  'Somalia/Somaliland|HANP': 1,
+  // Jordan
+  'Jordan|OSP': 3,
+  'Jordan|ESP': 3,
+  'Jordan|CWDP': 3,
+  'Jordan|WASH': 3,
+  'Jordan|SDLP': 3,
+  'Jordan|SPR': 3,
+  'Jordan|CPRP': 3,
+  'Jordan|ERDM': 3,
+  'Jordan|Qurbani': 3,
+  // Tanzania
+  'Tanzania|OSP': 3,
+  'Tanzania|SDLP': 3,
+  'Tanzania|CPRP': 1,
+  // Uganda
+  'Uganda|OSP': 3,
+  'Uganda|CPRP': 3,
+  'Uganda|HANP': 2,
+  // Nepal
+  'Nepal|OSP': 3,
+  'Nepal|ESP': 1,
+  'Nepal|WASH': 3,
+  'Nepal|SDLP': 3,
+  'Nepal|CPRP': 3,
+  'Nepal|HANP': 3,
+  'Nepal|ERDM': 3,
+  'Nepal|Qurbani': 3,
+  // Morocco
+  'Morocco|SPR': 3,
+  // Lebanon
+  'Lebanon|OSP': 3,
+  'Lebanon|ESP': 3,
+  'Lebanon|SDLP': 3,
+  'Lebanon|ERDM': 3,
+  'Lebanon|Qurbani': 2,
+  // Syria
+  'Syria|SPR': 3,
+  // Sri Lanka
+  'Sri Lanka|HANP': 2,
+  'Sri Lanka|Qurbani': 2,
+  // Philippines
+  'Philippines|OSP': 3,
+  'Philippines|SDLP': 3,
+  'Philippines|CPRP': 3,
+  'Philippines|Qurbani': 3,
+  // Thailand
+  'Thailand|ESP': 3,
+  'Thailand|CPRP': 3,
+  // Indonesia
+  'Indonesia|OSP': 3,
+  'Indonesia|ESP': 3,
+  'Indonesia|SDLP': 2,
+  // Haiti
+  'Haiti|OSP': 3,
+  // Malaysia
+  'Malaysia|WASH': 3,
+  // Laos
+  'Laos|ESP': 3,
+  // Cambodia
+  'Cambodia|ESP': 1,
+  'Cambodia|SPR': 3,
+  'Cambodia|HANP': 3,
+  // Turkiye
+  'Turkiye|SDLP': 2,
+  // Tunisia
+  'Tunisia|Qurbani': 3,
 };
 
 // Generate country-slug for photo paths (case-insensitive, hyphenated)
