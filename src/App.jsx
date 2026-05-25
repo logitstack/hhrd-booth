@@ -167,7 +167,7 @@ const CAROUSEL_INTERVAL_MS = 4500;
 //
 // To switch back to the full experience once photos and stories are in place:
 // flip this to `false`. No other code changes needed.
-const SOFT_LAUNCH_MODE = true;
+const SOFT_LAUNCH_MODE = false;
 
 // ============================================================
 // Analytics - persists via browser localStorage (per device).
