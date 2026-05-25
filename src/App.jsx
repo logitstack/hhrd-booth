@@ -992,7 +992,7 @@ function PhotoPane({ country }) {
 }
 
 // ============================================================
-// Admin panel (5-tap on top-left corner)
+// Admin panel (5-tap on top-right corner)
 // ============================================================
 
 function AdminPanel({ onClose }) {
@@ -2448,7 +2448,7 @@ export default function App() {
     beginQuizGame(quizNickname || "Guest");
   };
 
-  // 5-tap admin access on the invisible top-left corner trigger.
+  // 5-tap admin access on the invisible top-right corner trigger.
   const handleAdminTap = () => {
     const now = Date.now();
     if (now - tapsRef.current.lastTap < 700) tapsRef.current.count++;
@@ -2482,7 +2482,7 @@ export default function App() {
     >
       <div
         onPointerUp={handleAdminTap}
-        style={{ position: "fixed", top: 0, left: 0, width: 60, height: 60, zIndex: 50, cursor: "default" }}
+        style={{ position: "fixed", top: 0, right: 0, width: 60, height: 60, zIndex: 50, cursor: "default" }}
       />
 
       <div
@@ -2505,7 +2505,7 @@ export default function App() {
             onPinTap={handleSelectCountry}
             selectedCountry={selectedCountry}
             onClosePopup={handleClosePopup}
-            idleSpin={true}
+            idleSpin={!inQuiz}
             hidePins={quizPhase === 'playing' || quizPhase === 'feedback'}
             hidePopup={inQuiz}
             highlightCountryName={quizPhase === 'feedback' ? quizLastAnswer?.tappedName : null}
