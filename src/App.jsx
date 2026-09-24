@@ -29,6 +29,13 @@ const PROGRAMS = Object.fromEntries(
 
 const COUNTRIES = COUNTRY_DATA;
 
+// countryData.js is ordered by beneficiary count, which is the right order for
+// nothing a visitor does. The search and browse list uses this A-Z copy so
+// someone looking for their country can scan straight to the letter.
+const COUNTRIES_ALPHA = [...COUNTRY_DATA].sort((a, b) =>
+  a.name.localeCompare(b.name, "en", { sensitivity: "base" })
+);
+
 // Lookup helpers. These hit a small in-memory array, so cost is negligible.
 function getProgram(countryName, code) {
   const c = COUNTRIES.find(x => x.name === countryName);
@@ -2642,8 +2649,8 @@ export default function App() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return COUNTRIES;
-    return COUNTRIES.filter(c =>
+    if (!q) return COUNTRIES_ALPHA;
+    return COUNTRIES_ALPHA.filter(c =>
       c.name.toLowerCase().includes(q) ||
       c.aliases.some(a => a.toLowerCase().includes(q))
     );
