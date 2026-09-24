@@ -148,6 +148,11 @@ const FONTS_LINK = "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@
 const TOPOJSON_URL = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 const TOPOJSON_URL_FALLBACK = "https://unpkg.com/world-atlas@2/countries-110m.json";
 
+// Auto-rotation. Off: the globe holds still until a visitor drags it, so
+// country labels stay readable and nobody has to chase a moving target.
+// Flip to true to bring the slow attract-mode spin back.
+const IDLE_SPIN = false;
+
 // 90 seconds idle = session end. Booth visits typically run 30-90s.
 const SESSION_TIMEOUT_MS = 90 * 1000;
 const GLOBE_SIZE = 1000;
@@ -170,20 +175,19 @@ const CAROUSEL_INTERVAL_MS = 4500;
 const SOFT_LAUNCH_MODE = false;
 
 // ============================================================
-// Analytics - persists via browser localStorage (per device).
-// Survives reboots and app restarts. Wiped only by admin Reset or by clearing
-// browser data. Silently swallows errors if storage is unavailable.
+// Analytics - in-memory, scoped to this page load.
+// Numbers start at zero every time the site is opened or refreshed, so whoever
+// is running the booth can work a shift and read that shift's figures straight
+// from the admin panel with no login and no stale history from other staff.
+// Closing or refreshing the tab clears everything - export the CSV first.
 // ============================================================
 
 const Analytics = {
-  KEY: 'hhrd:analytics:v2',
+  LEGACY_KEY: 'hhrd:analytics:v2',   // old localStorage store, cleared on load
+  _store: null,
   _read() {
-    try {
-      const raw = localStorage.getItem(this.KEY);
-      if (!raw) return this._empty();
-      const parsed = JSON.parse(raw);
-      return { ...this._empty(), ...parsed };
-    } catch { return this._empty(); }
+    if (!this._store) this._store = this._empty();
+    return this._store;
   },
   _empty() {
     return {
@@ -206,11 +210,9 @@ const Analytics = {
     };
   },
   _write(obj) {
-    try {
-      obj.lastSeen = new Date().toISOString();
-      if (!obj.firstSeen) obj.firstSeen = obj.lastSeen;
-      localStorage.setItem(this.KEY, JSON.stringify(obj));
-    } catch (e) { /* storage unavailable */ }
+    obj.lastSeen = new Date().toISOString();
+    if (!obj.firstSeen) obj.firstSeen = obj.lastSeen;
+    this._store = obj;
   },
   startSession() {
     const a = this._read();
@@ -263,11 +265,15 @@ const Analytics = {
     a.donateOpensByCountry[countryName] = (a.donateOpensByCountry[countryName] || 0) + 1;
     this._write(a);
   },
-  getSummary() { return this._read(); },
-  reset() {
-    try { localStorage.removeItem(this.KEY); } catch {}
-  }
+  // Hand back a detached copy so the admin panel's state can't be mutated
+  // underneath it by counters that keep ticking while the panel is open.
+  getSummary() { return JSON.parse(JSON.stringify(this._read())); },
+  reset() { this._store = this._empty(); }
 };
+
+// Clear anything left behind by the earlier localStorage-backed build so a
+// device that ran the old version doesn't carry old totals forward.
+try { localStorage.removeItem(Analytics.LEGACY_KEY); } catch {}
 
 // ============================================================
 // Donate modal - client-side QR (no external service dependency)
@@ -1308,6 +1314,60 @@ const ZOOM_MIN = 0.7;
 const ZOOM_MAX = 3.5;
 const ZOOM_STEP = 1.35;  // multiplier per +/- button click
 
+// ---- Globe labelling -------------------------------------------------------
+// Names sit on the globe in two tiers: HHRD countries get a clear label under
+// their pin, every other country gets a quiet one so visitors can orient
+// themselves while they look for theirs.
+
+// Only label non-HHRD countries above this surface area (steradians; the whole
+// sphere is 4*PI ~= 12.57). 0.015 sr is roughly 600,000 km2, so at rest the
+// globe shows a couple dozen names rather than an unreadable crowd. The
+// threshold is divided by zoom^2, so zooming in surfaces smaller neighbours.
+const LABEL_AREA_MIN = 0.015;
+
+// How far from the horizon a label must sit before it is drawn. Near the rim
+// the projection squashes text sideways, so the outer band stays clean.
+const LABEL_FACING_MIN = 0.28;
+
+// Atlas features the globe deliberately leaves unnamed. Gaza and the West Bank
+// are named from HHRD's own pins below, not from the atlas's single lumped
+// "Palestine" polygon; Israel is not labelled.
+const LABEL_SKIP = new Set(["israel", "palestine", "west bank", "gaza"]);
+
+// Pins that claim their label slot before anyone else. Gaza and the West Bank
+// sit a few pixels apart on a zoomed-out globe, so without this the collision
+// pass hands the space to a larger neighbour and one of them goes unnamed.
+const LABEL_PRIORITY = new Set(["Palestine - Gaza", "Palestine - West Bank"]);
+
+// Display names for HHRD's own pins where the data label is longer than the
+// globe needs. Keys are the country names in countryData.js.
+const LABEL_PIN_NAMES = {
+  "Palestine - Gaza": "Gaza",
+  "Palestine - West Bank": "West Bank",
+  "Trinidad and Tobago": "Trinidad",
+  "Dominican Republic": "Dominican Rep.",
+  "Somalia/Somaliland": "Somalia"
+};
+
+// Atlas names that are too long to sit on a country at label size.
+const LABEL_SHORT_NAMES = {
+  "Democratic Republic of the Congo": "DR Congo",
+  "Central African Republic": "C.A.R.",
+  "United Republic of Tanzania": "Tanzania",
+  "United States of America": "United States",
+  "United Arab Emirates": "UAE",
+  "Bosnia and Herzegovina": "Bosnia",
+  "Republic of Serbia": "Serbia",
+  "Papua New Guinea": "Papua N.G.",
+  "Dominican Republic": "Dominican Rep.",
+  "Equatorial Guinea": "Eq. Guinea",
+  "Republic of the Congo": "Congo",
+  "Northern Cyprus": "N. Cyprus",
+  "Falkland Islands": "Falklands",
+  "French Southern and Antarctic Lands": "Fr. S. Antarctic Lands",
+  "South Georgia and the Islands": "South Georgia"
+};
+
 function Globe({
   geoData,
   focusTarget,
@@ -1531,18 +1591,105 @@ function Globe({
     }).filter(c => c.d);
   }, [geoData, path]);
 
+  // How square-on to the viewer a lon/lat sits: 1 dead centre, 0 on the horizon,
+  // negative round the back. Drives both pin fade and label culling.
+  const facing = useCallback((lon, lat) => {
+    const lambda = (lon + rotation[0]) * Math.PI / 180;
+    const phi = (lat + rotation[1]) * Math.PI / 180;
+    return Math.cos(phi) * Math.cos(lambda);
+  }, [rotation]);
+
   const pinData = useMemo(() => {
     return COUNTRIES.map(c => {
       const coords = projection([c.lon, c.lat]);
       if (!coords) return null;
-      const r = rotation;
-      const lambda = c.lon + r[0];
-      const phi = c.lat + r[1];
-      const cos = Math.cos(phi * Math.PI / 180) * Math.cos(lambda * Math.PI / 180);
+      const cos = facing(c.lon, c.lat);
       if (cos < -0.05) return null;
-      return { c, x: coords[0], y: coords[1], visible: cos > 0 };
+      return { c, x: coords[0], y: coords[1], visible: cos > 0, cos };
     }).filter(Boolean);
-  }, [rotation, projection]);
+  }, [projection, facing]);
+
+  // Label anchors for every country HHRD doesn't work in. Centroid and area are
+  // properties of the geometry rather than the current view, so they're computed
+  // once per dataset and only re-projected as the globe turns.
+  const labelSeeds = useMemo(() => {
+    if (!geoData) return [];
+    return geoData.features.map((f, i) => {
+      const name = (f.properties && (f.properties.name || f.properties.NAME || f.properties.ADMIN)) || "";
+      if (!name) return null;
+      const lname = name.toLowerCase();
+      if (COUNTRY_LOOKUP.has(lname)) return null;  // those carry a pin label instead
+      if (LABEL_SKIP.has(lname)) return null;
+      const [lon, lat] = d3.geoCentroid(f);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+      return { key: `f${i}`, name: LABEL_SHORT_NAMES[name] || name, lon, lat, area: d3.geoArea(f) };
+    }).filter(Boolean);
+  }, [geoData]);
+
+  // The two tiers are laid out together so they can't collide. HHRD countries go
+  // down first and always win; the quiet labels fill whatever space is left, so a
+  // crowded region like the Levant or the Balkans thins out instead of turning
+  // into a pile of overlapping words.
+  const labels = useMemo(() => {
+    const placed = [];
+    const boxes = [];
+    const free = (box) => !boxes.some(b =>
+      box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]
+    );
+    // Drops the label at the first offset that doesn't overlap something already
+    // placed. Two close neighbours (Gaza and the West Bank, say) end up one above
+    // its pin and one below rather than one of them vanishing.
+    const tryPlace = (label, offsets) => {
+      const halfW = label.text.length * label.size * 0.29 + 4;
+      const halfH = label.size * 0.72;
+      for (const dy of offsets) {
+        const y = label.y + dy;
+        const box = [label.x - halfW, y - halfH, label.x + halfW, y + halfH];
+        if (!free(box)) continue;
+        boxes.push(box);
+        placed.push({ ...label, y });
+        return;
+      }
+    };
+
+    // Tier 1 - HHRD countries, sitting just under their pin.
+    pinData
+      .filter(p => p.cos > 0.1)
+      .sort((a, b) =>
+        (LABEL_PRIORITY.has(b.c.name) - LABEL_PRIORITY.has(a.c.name)) || (b.cos - a.cos))
+      .forEach(p => {
+        const baseR = 5 + Math.min(p.c.programs.length, 11) * 0.5;
+        const below = baseR + 22, above = -(baseR + 15);
+        tryPlace({
+          key: `hhrd:${p.c.name}`,
+          text: LABEL_PIN_NAMES[p.c.name] || p.c.name,
+          x: p.x, y: p.y,
+          size: 16, weight: 600, fill: COLORS.navy,
+          opacity: 0.72 + 0.28 * Math.min(1, (p.cos - 0.1) / 0.4)
+        }, [below, above, below + 20, above - 20]);
+      });
+
+    // Tier 2 - everywhere else, big enough to carry a name at this zoom.
+    const threshold = LABEL_AREA_MIN / (zoom * zoom);
+    labelSeeds
+      .filter(s => s.area >= threshold)
+      .map(s => ({ s, cos: facing(s.lon, s.lat) }))
+      .filter(({ cos }) => cos >= LABEL_FACING_MIN)
+      .sort((a, b) => b.cos - a.cos)
+      .forEach(({ s, cos }) => {
+        const coords = projection([s.lon, s.lat]);
+        if (!coords) return;
+        tryPlace({
+          key: `c:${s.key}`,
+          text: s.name,
+          x: coords[0], y: coords[1],
+          size: 12, weight: 500, fill: COLORS.navyMid,
+          opacity: 0.5 + 0.28 * Math.min(1, (cos - LABEL_FACING_MIN) / 0.35)
+        }, [4, -12, 20]);
+      });
+
+    return placed;
+  }, [pinData, labelSeeds, projection, facing, zoom]);
 
   const toScreen = (svgX, svgY) => {
     const cw = containerSize.w, ch = containerSize.h;
@@ -1629,6 +1776,29 @@ function Globe({
         })}
 
         <circle cx={GLOBE_SIZE / 2} cy={GLOBE_SIZE / 2} r={baseScale * zoom} fill="url(#rimGlow)" pointerEvents="none" />
+
+        {/* Country names. Hidden in quiz mode alongside the pins - the whole
+            point of the quiz is finding the country unaided. */}
+        {!hidePins && labels.map(l => (
+          <text key={l.key} x={l.x} y={l.y}
+            textAnchor="middle" pointerEvents="none"
+            style={{
+              fontFamily: "'Outfit', sans-serif",
+              fontSize: l.size,
+              fontWeight: l.weight,
+              letterSpacing: "0.03em",
+              fill: l.fill,
+              opacity: l.opacity,
+              // Light halo painted behind the glyphs so the name stays legible
+              // over both the white program countries and the dark ocean.
+              stroke: "rgba(255, 255, 255, 0.9)",
+              strokeWidth: l.size * 0.22,
+              strokeLinejoin: "round",
+              paintOrder: "stroke"
+            }}>
+            {l.text}
+          </text>
+        ))}
 
         {!hidePins && pinData.map(p => {
           const isSelected = selectedCountry?.name === p.c.name;
@@ -2505,7 +2675,7 @@ export default function App() {
             onPinTap={handleSelectCountry}
             selectedCountry={selectedCountry}
             onClosePopup={handleClosePopup}
-            idleSpin={!inQuiz}
+            idleSpin={IDLE_SPIN && !inQuiz}
             hidePins={quizPhase === 'playing' || quizPhase === 'feedback'}
             hidePopup={inQuiz}
             highlightCountryName={quizPhase === 'feedback' ? quizLastAnswer?.tappedName : null}
@@ -2740,7 +2910,7 @@ export default function App() {
         Play the quiz
       </button>
 
-      {/* Screensaver overlay - rotating globe is already behind everything;
+      {/* Screensaver overlay - the globe sits behind everything;
           this overlays a centered headline plus tap-to-begin hint. */}
       <div
         className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"
