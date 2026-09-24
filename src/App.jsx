@@ -153,6 +153,10 @@ const TOPOJSON_URL_FALLBACK = "https://unpkg.com/world-atlas@2/countries-110m.js
 // Flip to true to bring the slow attract-mode spin back.
 const IDLE_SPIN = false;
 
+// Height of the opaque bar that carries the search field in active mode.
+// Anything pinned to the top of the screen has to clear it.
+const TOP_BAR_HEIGHT = 84;
+
 // 90 seconds idle = session end. Booth visits typically run 30-90s.
 const SESSION_TIMEOUT_MS = 90 * 1000;
 const GLOBE_SIZE = 1000;
@@ -709,12 +713,15 @@ function ProgramPhotoCard({ code, countryName }) {
           <I size={15} style={{ color: p.color }} />
         </div>
         <div className="flex-1 min-w-0">
-          <div style={{
-            fontFamily: "'Outfit', sans-serif", fontWeight: 700, fontSize: "10px",
-            letterSpacing: "0.18em", color: p.color
-          }}>
-            {code}
-          </div>
+          {/* Qurbani's code and full name are the same word - print it once. */}
+          {code !== p.name && (
+            <div style={{
+              fontFamily: "'Outfit', sans-serif", fontWeight: 700, fontSize: "10px",
+              letterSpacing: "0.18em", color: p.color
+            }}>
+              {code}
+            </div>
+          )}
           <div style={{
             fontFamily: "'Fraunces', serif", fontWeight: 500, fontSize: "13px",
             color: COLORS.textPrimary, lineHeight: 1.15, fontVariationSettings: "'opsz' 144"
@@ -950,8 +957,11 @@ function PhotoPane({ country }) {
   const stories = getStories(country.name);
   return (
     <div
-      className="absolute top-0 right-0 bottom-0 flex flex-col"
+      className="absolute right-0 bottom-0 flex flex-col"
       style={{
+        // Starts below the search bar - at top: 0 the bar painted over the
+        // pane's own heading and sliced the line under it in half.
+        top: TOP_BAR_HEIGHT,
         width: 420,
         background: COLORS.bg,
         borderLeft: `1px solid ${COLORS.panelBorder}`,
@@ -2661,7 +2671,7 @@ export default function App() {
           left: 0,
           right: selectedCountry && !SOFT_LAUNCH_MODE && !inQuiz ? 420 : 0,
           bottom: 0,
-          top: (mode === "active" && !inQuiz) ? "84px" : (quizPhase === 'playing' || quizPhase === 'feedback') ? "150px" : 0,
+          top: (mode === "active" && !inQuiz) ? TOP_BAR_HEIGHT : (quizPhase === 'playing' || quizPhase === 'feedback') ? 150 : 0,
           opacity: 1,
           pointerEvents: "auto",
           transition: "top 0.55s cubic-bezier(.4,.0,.2,1), right 0.45s cubic-bezier(.2,.9,.2,1)",
@@ -2727,7 +2737,7 @@ export default function App() {
       <div
         className="absolute left-0 right-0 top-0"
         style={{
-          height: "84px",
+          height: TOP_BAR_HEIGHT,
           background: COLORS.bg,
           borderBottom: `1px solid ${COLORS.panelBorder}`,
           opacity: (mode === "active" && !inQuiz) ? 1 : 0,
@@ -2790,7 +2800,7 @@ export default function App() {
       <div
         className="absolute left-1/2 z-20"
         style={{
-          top: "84px",
+          top: TOP_BAR_HEIGHT,
           transform: "translateX(-50%)",
           width: "min(600px, 86vw)",
           maxHeight: "min(60vh, 580px)",
